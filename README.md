@@ -1,6 +1,8 @@
 # JEPA Model Views Experimentation
 
-This repository is dedicated to experimenting with **Joint-Embedding Predictive Architecture (JEPA)** model views in Image Prediction tasks. It leverages advancements from **VICRegularization** (Variance-Invariance-Covariance Regularization) and the **LeJEPA** framework to explore how different view selection strategies influence representation learning efficiency and quality.
+This repository is dedicated to experimenting with **Joint-Embedding Predictive Architecture (JEPA)** model views in Image Prediction tasks. It leverages advancements from **VICRegularization** (Variance-Invariance-Covariance Regularization) and the [**LeJEPA**](https://github.com/galilai-group/lejepa) framework to explore how different view selection strategies influence representation learning efficiency and quality. <br>
+
+#### [Weights and Biases Link](https://wandb.ai/aho13-duke-university/VIT_JEPA_Views?nw=nwuseraho13)
 
 ## Goals
 
