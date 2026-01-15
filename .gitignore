@@ -1,0 +1,8 @@
+/venv
+/wandb
+/outputs
+*/__pycache__
+/data/
+/logs
+/cache
+/env
