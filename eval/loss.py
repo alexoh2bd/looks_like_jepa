@@ -181,6 +181,29 @@ def LeJEPA(global_proj, all_proj, sigreg, lamb, global_step=None):
     # (N, 1, D) - (N, V, D) -> (N, V, D) -> scalar mean
     sim_loss = (centers - all_proj).square().mean()
     
+    sigreg_losses = []
+    for i in range(all_proj.shape[1]):
+        view_emb = all_proj[:, i, :] # (N, D)
+        l = sigreg(view_emb) # scalar
+        sigreg_losses.append(l)
+    sigreg_loss = torch.stack(sigreg_losses).mean()
+    
+    return (1 - lamb) * sim_loss + lamb * sigreg_loss, sim_loss, sigreg_loss
+
+
+def LeDINO(global_proj, all_proj, sigreg, lamb, global_step=None):
+    """
+    global_proj: (N, Vg, D) - Embeddings of global views
+    all_proj: (N, V, D) - Embeddings of all views (global + local)
+    lamb: scalar weight
+    """
+    # Centers from global views
+    centers = global_proj.mean(dim=1, keepdim=True) # (N, 1, D)
+    
+    # Prediction loss (MSE between centers and all views)
+    # (N, 1, D) - (N, V, D) -> (N, V, D) -> scalar mean
+    sim_loss = (centers - all_proj).square().mean()
+    
     # Vectorized SIGReg: flatten views dimension and process all at once
     # This avoids the Python loop which keeps intermediate tensors alive
     N, V, D = all_proj.shape
@@ -192,6 +215,8 @@ def LeJEPA(global_proj, all_proj, sigreg, lamb, global_step=None):
     sigreg_loss = torch.stack(sigreg_losses).mean()
     
     return (1 - lamb) * sim_loss + lamb * sigreg_loss, sim_loss, sigreg_loss
+
+
 
 
 def VICReg(global_proj, all_proj, lamb=25,mu=25,nu=1, gamma=1.0, eps = 0.0001):

@@ -1,8 +1,14 @@
 /venv
 /wandb
 /outputs
-/eval/__pycache__
-/data/
+*/__pycache__
+/data
 /logs
 /cache
 /env
+
+.*
+/log
+/debug*
+*.sqlite
+*.nsys-rep

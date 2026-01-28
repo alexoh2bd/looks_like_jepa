@@ -1,16 +1,16 @@
 #!/bin/bash
-#SBATCH --job-name=simclr_train
+#SBATCH --job-name=lejepa
 #SBATCH --output=logs/%x_%j.log
 #SBATCH --error=logs/%x_%j.err
-#SBATCH --nodes=1
+#SBATCH --nodes=4
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=32G
-#SBATCH --time=48:00:00
+#SBATCH --cpus-per-task=6
+#SBATCH --mem=50G
+#SBATCH --time=24:00:00
 #SBATCH --partition=compsci-gpu
-#SBATCH --gres=gpu:a6000:1
-
-
+#SBATCH --gres=gpu:a6000:4
+export OMP_NUM_THREADS=6
+export MKL_NUM_THREADS=6
 # Fail fast
 set -e
 
@@ -31,21 +31,24 @@ python --version
 # Run training
 export HYDRA_FULL_ERROR=1
 
-./run_inf.sh python eval/run_CL.py \
+# Memory-efficient training configuration:
+./run_inf.sh python eval/run_JEPA.py \
+  +lamb=0.05 \
+  +V_global=2 \
+  +V_local=6 \
+  +V_mixed=2 \
   +model_name=vit_base_patch16_224.dino \
-  +proj_dim=512 \
-  +lr=5e-4 \
+  +save_prefix=vit_JEPA \
   +global_img_size=224 \
   +local_img_size=96 \
-  +bs=512 \
-  +grad_accum=1 \
-  +epochs=100 \
-  +weight_decay=0.0 \
-  +num_workers=4\
+  +proj_dim=256 \
+  +lr=5e-4 \
+  +bs=256 \
+  +grad_accum=2\
+  +epochs=300 \
+  +num_workers=6 \
   +device=cuda \
+  +prefetch_factor=4 \
+  +benchmark=False \
   +dataset=inet100 \
-  +temperature=0.5 \
-  +prefetch_factor=4\
-  +V_global=2\
-  +V_local=6\
-  +V_mixed=2
+  +reg=LeJEPA \

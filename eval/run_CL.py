@@ -54,6 +54,7 @@ def main(cfg: DictConfig):
     V_local = cfg.get("V_local", 4)
     V_mixed =cfg.get("V_mixed", 2)
     view_selection = "random" if V_mixed == 0 else "mixed"
+    reg="SimCLR"
 
 
     save_prefix = f"SimCLR_{dataset}_{model_name}/LV{V_local}_e{epochs}"
@@ -110,8 +111,9 @@ def main(cfg: DictConfig):
     )
 
     # Scheduler
-    warmup = len(train)
-    total_steps = len(train) * epochs
+    steps_per_epoch = len(train) // grad_accum
+    warmup = steps_per_epoch  # 1 epoch warmup in optimizer steps
+    total_steps = steps_per_epoch * epochs
     s1 = LinearLR(opt_encoder, start_factor=0.01, total_iters=warmup)
     s2 = CosineAnnealingLR(opt_encoder, T_max=total_steps - warmup, eta_min=1e-6)
     scheduler = SequentialLR(opt_encoder, [s1, s2], milestones=[warmup])
@@ -255,8 +257,8 @@ def main(cfg: DictConfig):
             "test/acc": acc,
             "test/epoch": epoch
         }, step=global_step)
-        
-    save_checkpoint(cfg, net, probe, opt_encoder, opt_probe, epoch, global_step, acc, reg, dataset, V=V_local, save_prefix=save_prefix)
+        if epoch+1 % 50 ==0:
+            save_checkpoint(cfg, net, probe, opt_encoder, opt_probe, epoch, global_step, acc,  dataset, reg="SimCLR", V=V_local, save_prefix=save_prefix)
     wandb.finish()
 
 
