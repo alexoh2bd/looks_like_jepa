@@ -16,8 +16,9 @@ from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
 from torchvision.ops import MLP
 from save import save_checkpoint
 from stats import  RepresentationMetrics
-from loss import SIGReg, LeJEPA,  VICReg
+from loss import SIGReg, LeJEPA
 from ds import HFDataset, CrossInstanceDataset, collate_views
+
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -138,7 +139,14 @@ def main(cfg: DictConfig):
     torch.backends.cuda.enable_flash_sdp(True)
     torch.backends.cuda.enable_mem_efficient_sdp(True)
     torch.backends.cuda.enable_math_sdp(False)
-    torch.manual_seed(0)
+    seed=0
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+
+
+    # Crucial for deterministic behavior on GPU
+    torch.backends.cudnn.deterministic = True 
+    torch.backends.cudnn.benchmark = False
     logging.info(cfg)
 
     # Hyperparameters
@@ -170,7 +178,7 @@ def main(cfg: DictConfig):
 
     
     # Datasets
-    if view_selection == "mixed":
+    if view_selection == "mixed" or view_selection == "hybrid":
         train_ds = CrossInstanceDataset("train", V_global=V_global, V_local=V_local, V_mixed = V_mixed, local_img_size=local_img_size, global_img_size=global_img_size, dataset=dataset)
     elif view_selection == "random":
         train_ds = HFDataset("train", V_global=V_global, V_local=V_local, local_img_size=local_img_size, global_img_size=global_img_size, dataset=dataset)
@@ -211,19 +219,14 @@ def main(cfg: DictConfig):
 
     # Model Setup
     net = Encoder(model_name=model_name, proj_dim=proj_dim).to(device)
-    # @torch.compile(mode="max-autotune")
-    # def forward_backward(batch):
-    #     loss = net.backbone(batch)
-    #     loss = loss / grad_accum
-    #     loss.backward()
-    #     return loss
+    
     num_classes=100 if dataset =="inet100" else 10
     probe = nn.Sequential(
         nn.LayerNorm(net.feat_dim), 
         nn.Linear(net.feat_dim, num_classes)
     ).to(device)
     sigreg = SIGReg().to(device)
-
+    # sigreg = EppsPulley().to(device)
    
     opt_encoder = torch.optim.AdamW(
         net.parameters(), 
@@ -268,7 +271,7 @@ def main(cfg: DictConfig):
     global_step = 0
     bestacc = 0
 
-
+ 
 
     for epoch in range(epochs):
         net.train()
@@ -292,26 +295,16 @@ def main(cfg: DictConfig):
                 global_views = [gpu_aug_global(g) for g in global_views]
                 local_views = [gpu_aug_local(l) for l in local_views]
 
-                # Forward - mark step before EACH net() call
-                
-                # net(views) -> (N, Vg, D), (N, Vg, D)
-                
-                # net(views) -> (N, Vl, D), (N, Vl, D)
-                all_views = global_views + local_views  # List concatenation
-                all_emb, all_proj = net(all_views)       # Single backbone call - better GPU utilization
-                # global_emb = all_emb[:, :len(global_views), :]
-                # local_emb = all_emb[:, len(global_views):, :]
+                all_views = global_views + local_views 
+                all_emb, all_proj = net(all_views)    
                 global_proj= all_proj[:, :len(global_views), :]
-                # local_emb = all_proj[:, len(global_views):, :]
-                
-                reg_loss, pred_loss, sigreg_loss = LeJEPA(global_proj, all_proj, sigreg, lamb, global_step)
+                reg_loss, pred_loss, sigreg_loss = LeJEPA(global_proj, all_proj, sigreg, lamb, losstype=reg, labels=y, global_step=global_step)
                 y_rep = y.repeat_interleave(len(vs)) # (N*V,)
                 yhat = probe(all_emb.flatten(0, 1).detach())
                 probe_loss = F.cross_entropy(yhat, y_rep)
                 
                 loss = reg_loss + probe_loss
                 
-                # Scale loss for gradient accumulation
                 loss = loss / grad_accum
 
             # Backward OUTSIDE autocast

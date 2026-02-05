@@ -5,6 +5,10 @@ SIGReg (LeJEPA)
 VICReg
 INFO_NCE (SimCLR)
 '''
+import torch
+# from .base import UnivariateTest
+from torch import distributed as dist
+
 
 import torch
 import timm 
@@ -18,97 +22,68 @@ from torch.utils.data import DataLoader
 import cv2
 import numpy as np
 
-'''
-def simclr_loss(global_proj, local_proj, labels, temperature=0.5):
-    """Standard InfoNCE loss for SimCLR"""
-    N = global_proj.shape[0]
-    device = global_proj.device
-    
-    # 1. Create anchors (mean of global views per sample)
-    anchors = global_proj.mean(dim=1)  # [N, D]
-    
-    # 2. Flatten all local views into single matrix
-    all_local = local_proj.reshape(N, -1, local_proj.shape[-1])  # [N, V_total, D]
-    V_total = all_local.shape[1]
-    
-    total_loss = 0.0
-    
-    for i in range(N):
-        anchor = anchors[i]  # [D]
-        
-        # 3. Positives: all local views from sample i
-        positives = all_local[i]  # [V_total, D]
-        
-        # 4. Negatives: all local views from OTHER samples
-        # Create mask for all samples except i
-        neg_mask = torch.ones(N, dtype=torch.bool, device=device)
-        neg_mask[i] = False
-        negatives = all_local[neg_mask].reshape(-1, all_local.shape[-1])  # [(N-1)*V_total, D]
-        
-        # 5. Compute similarities (cosine)
-        pos_sim = F.cosine_similarity(anchor.unsqueeze(0), positives, dim=1)  # [V_total]
-        neg_sim = F.cosine_similarity(anchor.unsqueeze(0), negatives, dim=1)  # [(N-1)*V_total]
-        
-        # 6. InfoNCE loss
-        pos_exp = torch.exp(pos_sim / temperature)  # [V_total]
-        neg_exp = torch.exp(neg_sim / temperature)  # [(N-1)*V_total]
-        
-        # For each positive, compute loss against ALL negatives
-        for p_exp in pos_exp:
-            loss_i = -torch.log(p_exp / (p_exp + neg_exp.sum()))
-            total_loss += loss_i
-    
-    # Average over all positive pairs
-    return total_loss / (N * V_total)
-'''
-'''
-def simclr_loss(global_proj, local_proj, temperature=0.5):
-    """
-    Fully vectorized SimCLR loss - no loops!
-    """
+
+from torch.distributed.nn import all_reduce as functional_all_reduce
+from torch.distributed.nn import ReduceOp
+
+
+def all_reduce(x, op="AVG"):
+    if dist.is_available() and dist.is_initialized():
+        op = ReduceOp.__dict__[op.upper()]
+        return functional_all_reduce(x, op)
+    else:
+        return x
+def simclr_loss(global_proj, local_proj, labels=None, temperature=0.5):
+    '''
+    SimCLR/InfoNCE loss: global views as anchors, local views as positives
+    '''
     N, V_g, D = global_proj.shape
     V_l = local_proj.shape[1]
+    device = global_proj.device
     
-    # Anchors: [N, D]
+    # Anchors: mean of global views [N, D]
     anchors = global_proj.mean(dim=1)
     
-    # Flatten locals: [N*V_l, D]
-    locals_flat = local_proj.reshape(-1, D)
+    # All local views [N, V_l, D]
+    all_local = local_proj
     
-    # Compute all pairwise similarities: [N, N*V_l]
-    sim_matrix = F.cosine_similarity(
-        anchors.unsqueeze(1),           # [N, 1, D]
-        locals_flat.unsqueeze(0),       # [1, N*V_l, D]
-        dim=2
+    # Compute similarities: [N, N, V_l]
+    sim = F.cosine_similarity(
+        anchors.unsqueeze(1).unsqueeze(2),  # [N, 1, 1, D]
+        all_local.unsqueeze(0),              # [1, N, V_l, D]
+        dim=3
     ) / temperature
     
-    # Create positive mask: [N, N*V_l]
-    # Positives are at indices [i*V_l : (i+1)*V_l] for anchor i
-    pos_mask = torch.zeros(N, N * V_l, dtype=torch.bool, device=anchors.device)
-    for i in range(N):
-        pos_mask[i, i*V_l:(i+1)*V_l] = True
+    # Create mask for positives (diagonal samples)
+    eye_mask = torch.eye(N, dtype=torch.bool, device=device)  # [N, N]
     
-    # Compute loss
-    exp_sim = torch.exp(sim_matrix)
+    # Extract positive similarities: [N, V_l]
+    pos_sim = sim[eye_mask]  # Shape: [N, V_l]
     
-    # For each anchor, sum positives and all (pos + neg)
-    pos_sum = (exp_sim * pos_mask).sum(dim=1)  # [N]
-    all_sum = exp_sim.sum(dim=1)                # [N]
+    # For denominator, we need exp of all similarities
+    exp_sim = torch.exp(sim)  # [N, N, V_l]
     
-    loss = -torch.log(pos_sum / all_sum).mean()
-    return loss
+    # Sum over all samples and views for each anchor
+    denom = exp_sim.sum(dim=(1, 2))  # [N]
+    
+    # Loss: -log(exp(pos) / sum(exp(all)))
+    # = -pos + log(sum(exp(all)))
+    # Average over all V_l positive views
+    losses = -pos_sim + denom.unsqueeze(1).log()  # [N, V_l]
+    
+    return losses.mean()
 '''
-def simclr_loss(global_proj, local_proj, labels, temperature=0.5):
+def simclr_loss(global_proj, local_proj, labels, temperature=0.5, cheating=False):
+    
+    Actually accidental (SupCon) Supervised Contrastive loss with
+    Label-based positive view selection, (rather than all positives).
+    
+    if is_dist_avail_and_initialized():
+        pass
     N, V_g, D = global_proj.shape
     V_l = local_proj.shape[1]
     device = global_proj.device
-    
-    # Pre-compute masks
-    labels_expanded = labels.unsqueeze(1)  # [N, 1]
-    same_class = (labels_expanded == labels_expanded.T)  # [N, N]
-    same_index = torch.eye(N, dtype=torch.bool, device=device)  # [N, N]
-    neg_mask = ~same_class & ~same_index  # [N, N]
-    
+            
     # Anchors and locals
     anchors = global_proj.mean(dim=1)  # [N, D]
     all_local = local_proj.reshape(N, V_l, D)  # [N, V_l, D]
@@ -119,30 +94,95 @@ def simclr_loss(global_proj, local_proj, labels, temperature=0.5):
         all_local.unsqueeze(0),                  # [1, N, V_l, D]
         dim=3
     ) / temperature
+
+    # Vectorized loss computation
+    exp_sim = torch.exp(sim)  # [N, N, V_l]
+    sum_over_vl = exp_sim.sum(dim=2)  # [N, N]
+
+    # if cheating:
+    #     labels_expanded = labels.unsqueeze(1)  # [N, 1]
+    #     same_class = (labels_expanded == labels_expanded.T)  # [N, N]
+    #     same_index = torch.eye(N, dtype=torch.bool, device=device)  # [N, N]
+    #     neg_mask = ~same_class & ~same_index  # [N, N]
+    #     neg_sum = (sum_over_vl * neg_mask.float()).sum(dim=1)  # [N]
+    # else:
+    neg_sum = sum_over_vl.sum(dim=1)
     
-    # Compute loss per sample
-    losses = []
-    for i in range(N):
-        # Positives: own views
-        pos_sim = sim[i, i, :]  # [V_l]
-        
-        # Negatives: views from different class samples
-        neg_samples = neg_mask[i]  # [N] boolean mask
-        neg_sim = sim[i, neg_samples, :].reshape(-1)  # [num_negs * V_l]
-        
-        if neg_sim.numel() == 0:
-            # No negatives for this sample (entire batch is same class)
-            continue
-        
-        # InfoNCE for each positive view
-        pos_exp = torch.exp(pos_sim)  # [V_l]
-        neg_exp_sum = torch.exp(neg_sim).sum()  # scalar
-        
-        # Loss for all positives of sample i
-        loss_i = -torch.log(pos_exp / (pos_exp + neg_exp_sum))  # [V_l]
-        losses.append(loss_i.mean())
+    indices = torch.arange(N, device=device)
+    pos_sim = sim[indices, indices, :]  # [N, V_l]
+    pos_exp = exp_sim[indices, indices, :]  # [N, V_l]
+    pos_sum = pos_exp.sum(dim=1)  # [N]
+
+    denom = pos_sum + neg_sum  # [N]
+
+    # Loss per sample: [N]
+    losses = (denom.log().unsqueeze(1) - pos_sim).mean(dim=1)
+
+    # Mask samples with no negatives
+    mask = neg_sum > 0
+    if mask.any():
+        return losses[mask].mean()
+    else:
+        return torch.tensor(0.0, device=device)
     
-    return torch.stack(losses).mean() if losses else torch.tensor(0.0, device=device)
+    # # Compute loss per sample
+    # losses = []
+    # for i in range(N):
+    #     # Positives: own views
+    #     pos_sim = sim[i, i, :]  # [V_l]
+        
+    #     # Negatives: views from different class samples
+    #     neg_samples = neg_mask[i]  # [N] boolean mask
+    #     neg_sim = sim[i, neg_samples, :].reshape(-1)  # [num_negs * V_l]
+        
+    #     if neg_sim.numel() == 0:
+    #         # No negatives for this sample (entire batch is same class)
+    #         continue
+        
+    #     # InfoNCE for each positive view
+    #     pos_exp = torch.exp(pos_sim)  # [V_l]
+    #     neg_exp_sum = torch.exp(neg_sim).sum()  # scalar
+        
+    #     # Loss for all positives of sample i
+    #     loss_i = -torch.log(pos_exp / (pos_exp + neg_exp_sum))  # [V_l]
+    #     losses.append(loss_i.mean())
+    # Pre-compute masks
+'''
+def is_dist_avail_and_initialized():
+    return dist.is_available() and dist.is_initialized()
+
+
+
+def LeJEPA(global_proj, all_proj, sigreg, lamb, losstype="LeJEPA", labels=None, global_step=None):
+    """
+    global_proj: (N, Vg, D) - Embeddings of global views
+    all_proj: (N, V, D) - Embeddings of all views (global + local)
+    sigreg: Sigreg module
+    lamb: scalar weight    
+    """
+    # Centers from global views
+    centers = global_proj.mean(dim=1, keepdim=True) # (N, 1, D)
+    
+    # Prediction loss (MSE between centers and all views)
+    # if losstype == "hybrid":
+    #     local_proj = all_proj[:, global_proj.shape[1]:, :] # (N, Vl, D)
+    #     sim_loss= simclr_loss(global_proj,local_proj, labels, temperature=0.5)
+    # else:
+    sim_loss = (centers - all_proj).square().mean()
+    
+    sigreg_losses = []
+    for i in range(all_proj.shape[1]):
+        view_emb = all_proj[:, i, :] # (N, D)
+        l = sigreg(view_emb) # scalar
+        l = l.sum()
+        sigreg_losses.append(l)
+    sigreg_loss = torch.stack(sigreg_losses).mean()
+    
+    return (1 - lamb) * sim_loss + lamb * sigreg_loss, sim_loss, sigreg_loss
+
+
+
+
 
 class SIGReg(torch.nn.Module):
     def __init__(self, knots=17):
@@ -164,59 +204,17 @@ class SIGReg(torch.nn.Module):
         A = A.div_(A.norm(p=2, dim=0))
         x_t = (proj @ A).unsqueeze(-1) * self.t # (N*V, 256, 1) * (knots,) -> (N*V, 256, knots)
         # err: Mean over batch (dim 0) -> (256, knots)
-        err = (x_t.cos().mean(0) - self.phi).square() + x_t.sin().mean(0).square()
+        cos_mean = x_t.cos().mean(0)
+        sin_mean = x_t.sin().mean(0)
+
+        # Global reduction for DDP (average across processes)
+        if is_dist_avail_and_initialized():
+            all_reduce(cos_mean)  # Now averages globally
+            all_reduce(sin_mean)
+
+        err = (cos_mean - self.phi).square() + sin_mean.square()
         statistic = (err @ self.weights) * proj.size(0) # (256,) * scalar -> scalar (after mean)
         return statistic.mean()
-
-def LeJEPA(global_proj, all_proj, sigreg, lamb, global_step=None):
-    """
-    global_proj: (N, Vg, D) - Embeddings of global views
-    all_proj: (N, V, D) - Embeddings of all views (global + local)
-    lamb: scalar weight
-    """
-    # Centers from global views
-    centers = global_proj.mean(dim=1, keepdim=True) # (N, 1, D)
-    
-    # Prediction loss (MSE between centers and all views)
-    # (N, 1, D) - (N, V, D) -> (N, V, D) -> scalar mean
-    sim_loss = (centers - all_proj).square().mean()
-    
-    sigreg_losses = []
-    for i in range(all_proj.shape[1]):
-        view_emb = all_proj[:, i, :] # (N, D)
-        l = sigreg(view_emb) # scalar
-        sigreg_losses.append(l)
-    sigreg_loss = torch.stack(sigreg_losses).mean()
-    
-    return (1 - lamb) * sim_loss + lamb * sigreg_loss, sim_loss, sigreg_loss
-
-
-def LeDINO(global_proj, all_proj, sigreg, lamb, global_step=None):
-    """
-    global_proj: (N, Vg, D) - Embeddings of global views
-    all_proj: (N, V, D) - Embeddings of all views (global + local)
-    lamb: scalar weight
-    """
-    # Centers from global views
-    centers = global_proj.mean(dim=1, keepdim=True) # (N, 1, D)
-    
-    # Prediction loss (MSE between centers and all views)
-    # (N, 1, D) - (N, V, D) -> (N, V, D) -> scalar mean
-    sim_loss = (centers - all_proj).square().mean()
-    
-    # Vectorized SIGReg: flatten views dimension and process all at once
-    # This avoids the Python loop which keeps intermediate tensors alive
-    N, V, D = all_proj.shape
-    sigreg_losses = []
-    for i in range(V):
-        view_emb = all_proj[:, i, :] # (N, D)
-        l = sigreg(view_emb) # scalar
-        sigreg_losses.append(l)
-    sigreg_loss = torch.stack(sigreg_losses).mean()
-    
-    return (1 - lamb) * sim_loss + lamb * sigreg_loss, sim_loss, sigreg_loss
-
-
 
 
 def VICReg(global_proj, all_proj, lamb=25,mu=25,nu=1, gamma=1.0, eps = 0.0001):

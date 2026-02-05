@@ -6,6 +6,7 @@
 /logs
 /cache
 /env
+/checkpoints
 
 .*
 /log

@@ -6,6 +6,7 @@ from torchvision.transforms import v2
 from datasets import load_dataset
 
 import random
+import numpy as np
 
 
 def collate_views(batch):
@@ -35,8 +36,6 @@ def collate_views(batch):
                 views_by_size[size] = []
             views_by_size[size].append(v)
     
-    # Stack each resolution group - creates contiguous tensors on CPU
-    # Sort by size descending (global views first) for consistent ordering
     stacked_views = []
     for size in sorted(views_by_size.keys(), reverse=True):
         # Stack all views of this size: (num_views_of_this_size, C, H, W)
@@ -53,8 +52,6 @@ def collate_views(batch):
     labels = torch.tensor(labels, dtype=torch.long)
     
     return stacked_views, labels
-
-
 
 
 class HFDataset(Dataset):
@@ -99,6 +96,14 @@ class HFDataset(Dataset):
                 "val": self.inet_dir + "validation*.parquet",
             }
             self.ds = load_dataset("parquet", data_files=filenames, split=self.split)
+        elif dataset=="imagenet-1k":
+            self.inet_dir = "/home/users/aho13/jepa_tests/data/hub/datasets--ILSVRC--imagenet-1k/snapshots/49e2ee26f3810fb5a7536bbf732a7b07389a47b5/data"
+            
+            filenames = {
+                "train": self.inet_dir + "train*.parquet",
+                "val": self.inet_dir + "validation*.parquet",
+                "test": self.inet_dir + "test*.parquet",
+            }
         else:
             raise ValueError(f"Dataset {self.dataset} not supported")
 
@@ -160,20 +165,25 @@ class CrossInstanceDataset(HFDataset):
         
         self.V_mixed = V_mixed
         self.label_to_indices = None
-        self.mixed_candidates = {}
 
         # Build fast index mapping if training with mixed views
         if self.split == "train" and self.V_mixed > 0:
             self._build_label_index()
 
     def _build_label_index(self):
-        # FAST label → indices mapping (vectorized)
+        """Build numpy arrays for O(1) random sampling per class."""
         labels = self.ds["label"]  # zero-copy Arrow column
         num_classes = max(labels) + 1
 
-        self.label_to_indices = [[] for _ in range(num_classes)]
+        # Use numpy arrays instead of lists for faster random indexing
+        label_lists = [[] for _ in range(num_classes)]
         for idx, lbl in enumerate(labels):
-            self.label_to_indices[lbl].append(idx)
+            label_lists[lbl].append(idx)
+        
+        # Convert to numpy arrays for fast fancy indexing
+        self.label_to_indices = [np.array(lst, dtype=np.int64) for lst in label_lists]
+        # Pre-compute class sizes for bounds checking
+        self.class_sizes = np.array([len(lst) for lst in self.label_to_indices], dtype=np.int64)
 
     def __getitem__(self, i):
         # 1. Get standard views (Global + Local) from parent
@@ -184,10 +194,15 @@ class CrossInstanceDataset(HFDataset):
             return views, label
 
         # 3. Generate Mixed Views (Same Class, Different Instance)
+        # Fast numpy random sampling - much faster than random.sample()
         class_indices = self.label_to_indices[label]
-        mixed_indices = random.sample(class_indices, self.V_mixed)
+        class_size = len(class_indices)
         
-        # Batch fetch entries for mixed indices
+        # Use numpy randint + fancy indexing (faster than random.sample)
+        rand_positions = np.random.randint(0, class_size, size=self.V_mixed)
+        mixed_indices = class_indices[rand_positions].tolist()
+        
+        # Batch fetch entries (single I/O call)
         mixed_entries = self.ds[mixed_indices]
         
         # Handle batch output from datasets library (returns dict of lists)
@@ -198,10 +213,9 @@ class CrossInstanceDataset(HFDataset):
         else:
             raise ValueError("Image key not found in mixed entries")
 
-        # Transform and append
+        # Transform and append - keep loop but avoid .convert() overhead when possible
         for m_img in mixed_imgs:
-            # We use local_transform for mixed views as per original code logic
-            views.append(self.local_transform(m_img.convert("RGB")))
+            rgb_img = m_img if m_img.mode == "RGB" else m_img.convert("RGB")
+            views.append(self.local_transform(rgb_img))
 
         return views, label
-
