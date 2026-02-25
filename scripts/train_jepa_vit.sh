@@ -32,11 +32,11 @@ python --version
 export HYDRA_FULL_ERROR=1
 
 # Memory-efficient training configuration:
-./run_inf.sh python eval/run_JEPA.py \
+./run_inf.sh python src/run_JEPA.py \
   +lamb=0.05 \
   +V_global=2 \
-  +V_local=4 \
-  +V_mixed=0 \
+  +V_local=6 \
+  +V_mixed=2 \
   +model_name=vit_base_patch16_224.dino \
   +save_prefix=vit_JEPA \
   +global_img_size=224 \
@@ -44,7 +44,7 @@ export HYDRA_FULL_ERROR=1
   +proj_dim=512 \
   +lr=5e-4 \
   +bs=256 \
-  +grad_accum=2\
+  +grad_accum=1\
   +epochs=100 \
   +num_workers=6 \
   +device=cuda \

@@ -5,10 +5,10 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=32G
-#SBATCH --time=24:00:00
+#SBATCH --mem=45G
+#SBATCH --time=48:00:00
 #SBATCH --partition=compsci-gpu
-#SBATCH --gres=gpu:a5000:1
+#SBATCH --gres=gpu:rtx_pro_6000:1
 
 
 # Fail fast
@@ -32,27 +32,31 @@ python --version
 export HYDRA_FULL_ERROR=1
 
 # # SimCLR training configuration:
-srun python eval/run_training_loop.py \
-  +lamb=0.05 \
+srun python src/run_training_loop.py \
+  +lamb=0.05\
   +V_global=2 \
-  +V_local=2 \
-  +V_mixed=2\
-  +model_name=vit_base_patch16_224.dino \
+  +V_local=6 \
+  +V_mixed=2 \
+  +model_name=vit_large_patch16_dinov3.sat493m \
   +global_img_size=224 \
   +local_img_size=96 \
-  +proj_dim=256 \
+  +proj_dim=512 \
   +lr=5e-4 \
-  +bs=256 \
+  +bs=512 \
   +grad_accum=1 \
   +epochs=100\
   +num_workers=8\
   +device=cuda \
-  +prefetch_factor=4 \
-  +dataset=inet100 \
-  +reg=SimCLR \
+  +prefetch_factor=2 \
+  +dataset=imagenet-1k \
   +distributed=False \
   +seed=0 \
   +world_size=1 \
-  +log_interval=20 \
-  # +cl_cheating=False \
+  +log_interval=40 \
+  +reg=hybrid \
+  # +invariance_weight=25.0 \
+  # +rdm_reg_weight=125.0 \
+  # +lp_norm_parameter=2.0 \
+  # +mean_shift_value=0.0 \
+  # +target_distribution=rectified_lp_distribution \
 

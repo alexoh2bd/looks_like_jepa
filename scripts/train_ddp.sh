@@ -8,14 +8,30 @@
 #SBATCH --mem=50G
 #SBATCH --time=24:00:00
 #SBATCH --partition=compsci-gpu
-#SBATCH --gres=gpu:a6000:2
+#SBATCH --gres=gpu:a5000:2
+
+'''
+#SBATCH --job-name=ddp_train
+#SBATCH --output=logs/%x_%j.log
+#SBATCH --error=logs/%x_%j.err
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=4
+#SBATCH --cpus-per-task=6
+#SBATCH --mem=80G
+#SBATCH --time=24:00:00
+#SBATCH --partition=compsci-gpu
+#SBATCH --gres=gpu:a5000:4
+
+'''
+
+
 
 # Fail fast
 set -e
 
-# Threading config (split across 2 GPUs)
-export OMP_NUM_THREADS=6
-export MKL_NUM_THREADS=6
+export OMP_NUM_THREADS=4
+export MKL_NUM_THREADS=4
+export PYTORCH_ALLOC_CONF=expandable_segments:True
 
 # Activate environment
 source /home/users/aho13/jepa_tests/env/bin/activate
@@ -35,25 +51,52 @@ python --version
 export HYDRA_FULL_ERROR=1
 
 # Lightning handles DDP automatically when distributed=True and world_size>1
-srun python eval/run_training_loop.py \
+
+# world size = 2
+srun python src/run_training_loop.py \
   +lamb=0.05 \
   +V_global=2 \
-  +V_local=4 \
-  +V_mixed=0 \
+  +V_local=2 \
+  +V_mixed=2 \
   +model_name=vit_base_patch16_224.dino \
   +global_img_size=224 \
   +local_img_size=96 \
   +proj_dim=256 \
   +lr=5e-4 \
-  +bs=256 \
+  +bs=512 \
   +grad_accum=1 \
   +epochs=100\
   +num_workers=5 \
   +device=cuda \
-  +prefetch_factor=4 \
+  +prefetch_factor=2 \
+  +temperature=0.05 \
   +dataset=inet100 \
-  +reg=SimCLR \
+  +reg=LeJEPA \
   +distributed=True \
   +seed=0 \
   +world_size=2 \
-  +log_interval=20 \
+  +log_interval=40 \
+  
+# world size = 4
+# srun uv python eval/run_training_loop.py \
+#   +lamb=0.05 \
+#   +V_global=2 \
+#   +V_local=8 \
+#   +V_mixed=0 \
+#   +model_name=vit_base_patch16_224.dino \
+#   +global_img_size=224 \
+#   +local_img_size=96 \
+#   +proj_dim=256 \
+#   +lr=5e-4 \
+#   +bs=1024 \
+#   +grad_accum=1 \
+#   +epochs=100\
+#   +num_workers=4 \
+#   +device=cuda \
+#   +prefetch_factor=2 \
+#   +dataset=inet100 \
+#   +reg=hybrid \
+#   +distributed=True \
+#   +seed=0 \
+#   +world_size=4 \
+#   +log_interval=40 \

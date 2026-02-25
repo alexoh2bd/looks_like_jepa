@@ -31,7 +31,7 @@ python --version
 # Run training
 export HYDRA_FULL_ERROR=1
 
-./run_inf.sh python eval/run_CL.py \
+./run_inf.sh python src/run_CL.py \
   +model_name=vit_base_patch16_224.dino \
   +proj_dim=512 \
   +lr=5e-4 \
