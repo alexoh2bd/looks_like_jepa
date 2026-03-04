@@ -19,6 +19,7 @@
 #SBATCH --cpus-per-task=6
 #SBATCH --mem=60G
 #SBATCH --time=480:00:00
+#SBATCH --partition=${SLURM_PARTITION:-gpu}
 #SBATCH --gres=gpu:a6000:4
 
 2
@@ -30,6 +31,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=50G
 #SBATCH --time=280:00:00
+#SBATCH --partition=${SLURM_PARTITION:-gpu}
 #SBATCH --gres=gpu:a6000:2
 
 
@@ -43,7 +45,6 @@ export MKL_NUM_THREADS=4
 export PYTORCH_ALLOC_CONF=expandable_segments:True
 
 # Activate environment
-source ${env_activate}
 
 # Optional: debugging
 echo "Running on $(hostname)"
@@ -92,7 +93,7 @@ export HF_DATASETS_OFFLINE=1
 """
 
 # world size = 8
-srun python src/run_training_loop.py \
+uv run src/run_training_loop.py \
   +reg=hybrid \
   +model_name=vit_large_patch16_224 \
   +dataset=imagenet-1k \
