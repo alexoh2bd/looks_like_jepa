@@ -14,7 +14,6 @@
 set -e
 
 # Activate environment
-source ${env_activate}
 
 # Optional: debugging
 echo "Running on $(hostname)"
@@ -28,7 +27,7 @@ which python
 python --version
 
 # Run training
-python src/linear_probe.py \
+uv run python src/linear_probe.py \
     --checkpoint_path data/checkpoints/SimCLR_inet100_vit_base_patch16_224.dino/LV4\|MV0\|BS256_e100/V4/checkpoint_lastSimCLR_e99_inet100_4LV.pth \
     --model_name vit_base_patch16_224.dino \
     --proj_dim 256 \

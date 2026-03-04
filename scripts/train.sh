@@ -11,7 +11,7 @@
 
 set -e
 
-source ${env_activate}
+source /home/users/aho13/jepa_tests/env/bin/activate
 
 echo "Running on $(hostname)"
 echo "Running on partition: $SLURM_JOB_PARTITION"
@@ -41,7 +41,7 @@ export PYTORCH_ALLOC_CONF="expandable_segments:True"
 # Batch size:  ≥128
 # Architecture: No predictor, no register tokens, optional SWA
 # ──────────────────────────────────────────────────────────────
-srun python src/run_training_loop.py \
+uv run src/run_training_loop.py \
   +reg=LeJEPA \
   +model_name=vit_large_patch16_224 \
   +dataset=imagenet-1k \
